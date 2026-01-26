@@ -26,25 +26,25 @@ export function Footer({
       platform: "GitHub",
       url: "https://github.com/StabilityNexus",
       icon: <SiGithub className="h-5 w-5" />,
-      ariaLabel: "Visit HammerChain on GitHub"
+      ariaLabel: "Visit Maelstrom on GitHub"
     },
     {
       platform: "Discord",
       url: "https://discord.gg/BNsAtaX5",
       icon: <SiDiscord className="h-5 w-5" />,
-      ariaLabel: "Join HammerChain Discord community"
+      ariaLabel: "Join Maelstrom Discord community"
     },
     {
       platform: "Telegram",
       url: "https://t.me/StabilityNexus",
       icon: <SiTelegram className="h-5 w-5" />,
-      ariaLabel: "Follow HammerChain on Telegram"
+      ariaLabel: "Follow Maelstrom on Telegram"
     },
     {
       platform: "Twitter",
       url: "https://x.com/StabilityNexus",
       icon: <SiX className="h-5 w-5" />,
-      ariaLabel: "Follow HammerChain on Twitter"
+      ariaLabel: "Follow Maelstrom on Twitter"
     }
   ];
 
