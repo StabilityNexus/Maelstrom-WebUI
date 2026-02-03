@@ -25,6 +25,7 @@ export class ContractClient implements IContractClient {
                 functionName: 'approve',
                 args: [this.contractAddress, amount]
             })
+        await this.publicClient?.waitForTransactionReceipt({ hash });
         } catch (error) {
             throw new Error(`Token approval failed: ${(error as Error).message}`);
         }
