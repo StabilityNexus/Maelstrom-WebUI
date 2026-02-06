@@ -24,9 +24,12 @@ export class ContractClient implements IContractClient {
                 abi: erc20Abi,
                 functionName: 'approve',
                 args: [this.contractAddress, amount]
-            })
-        await this.publicClient?.waitForTransactionReceipt({ hash });
-        } catch (error) {
+            });
+           if (!this.publicClient) {
+                throw new Error("Public client is not available");
+           }
+            await this.publicClient.waitForTransactionReceipt({ hash });
+            catch (error) {
             throw new Error(`Token approval failed: ${(error as Error).message}`);
         }
     }
