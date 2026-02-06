@@ -55,7 +55,7 @@ export function TokenSelector({
               {selectedTokenData?.symbol.toUpperCase().charAt(0)}
             </span>
           </div>
-          <span>{selectedTokenData?.symbol.toUpperCase()}</span>
+          <span>{selectedTokenData?.symbol.toUpperCase() || "Select"}</span>
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </div>
       </Button>

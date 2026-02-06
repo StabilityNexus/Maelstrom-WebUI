@@ -6,28 +6,91 @@ import { Address, erc20Abi, formatEther, parseAbiItem, parseEther } from "viem";
 import { Config, UsePublicClientReturnType } from "wagmi";
 import { WriteContractMutateAsync } from "wagmi/query";
 
+/** Thrown when chainId is not in CONTRACT_ADDRESSES — UI should show "Wrong network" */
+export const UNSUPPORTED_CHAIN = "UNSUPPORTED_CHAIN";
+
+/** Fatal: publicClient not available (e.g. no provider). */
+const PUBLIC_CLIENT_UNAVAILABLE = "PUBLIC_CLIENT_UNAVAILABLE";
+
+function getErrorMessage(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    return String(err);
+}
+
+/**
+ * Expected/recoverable read failures: no data, contract not deployed, no logs, pool not instantiated.
+ * These get safe fallbacks. Fatal errors (wrong chain, missing config, ABI, no publicClient) still throw.
+ */
+function isExpectedReadFailure(error: unknown): boolean {
+    const msg = getErrorMessage(error).toLowerCase();
+    return (
+        msg.includes("returned no data") ||
+        msg.includes("no data (0x)") ||
+        (msg.includes("contract") && (msg.includes("not deployed") || msg.includes("could not be found"))) ||
+        msg.includes("no logs") ||
+        msg.includes("no events") ||
+        (msg.includes("pool") && msg.includes("not instantiated")) ||
+        msg.includes("execution reverted") && (msg.includes("0x") || msg.includes("no data"))
+    );
+}
+
 export class ContractClient implements IContractClient {
     contractAddress: Address;
-    writeContract: WriteContractMutateAsync<Config, unknown>
+    writeContract: WriteContractMutateAsync<Config, unknown>;
     publicClient: UsePublicClientReturnType;
+    private chainId: number;
 
     constructor(writeContract: WriteContractMutateAsync<Config, unknown>, publicClient: UsePublicClientReturnType, chainId?: number) {
-        this.contractAddress = chainId ? CONTRACT_ADDRESSES[chainId] : CONTRACT_ADDRESSES[63];
+        this.chainId = chainId ?? 63;
+        const addr = CONTRACT_ADDRESSES[this.chainId];
+        if (addr === undefined) {
+            console.error("[ContractClient] Unsupported chain.", { chainId: this.chainId });
+            throw new Error(UNSUPPORTED_CHAIN);
+        }
+        this.contractAddress = addr;
         this.writeContract = writeContract;
         this.publicClient = publicClient;
     }
 
-private async approveToken(token: string, amount: bigint): Promise<void> {
-    try {
-        const hash = await this.writeContract({
-            address: token as Address,
-            abi: erc20Abi,
-            functionName: 'approve',
-            args: [this.contractAddress, amount],
-        });
-
+    /** Call before any read. Throws on wrong network or missing publicClient (fatal). */
+    private ensureCanRead(): void {
+        if (CONTRACT_ADDRESSES[this.chainId] === undefined) {
+            console.error("[ContractClient] Unsupported chain.", { chainId: this.chainId });
+            throw new Error(UNSUPPORTED_CHAIN);
+        }
         if (!this.publicClient) {
-            throw new Error("Public client is not available");
+            console.error("[ContractClient] publicClient is undefined.");
+            throw new Error(PUBLIC_CLIENT_UNAVAILABLE);
+        }
+    }
+
+    /**
+     * Run a read-only call; on expected failures return fallback; on fatal errors rethrow and log error.
+     */
+    private async safeRead<T>(methodName: string, fallback: T, fn: () => Promise<T>): Promise<T> {
+        this.ensureCanRead();
+        try {
+            return await fn();
+        } catch (error) {
+            if (isExpectedReadFailure(error)) {
+                console.warn(`[ContractClient] Expected read failure (${methodName}), returning fallback. chainId=${this.chainId}`, getErrorMessage(error));
+                return fallback;
+            }
+            console.error(`[ContractClient] Fatal read error (${methodName}). chainId=${this.chainId}`, error);
+            throw error;
+        }
+    }
+
+    private async approveToken(token: string, amount: bigint): Promise<void> {
+        try {
+            await this.writeContract({
+                address: token as Address,
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [this.contractAddress, amount]
+            })
+        } catch (error) {
+            throw new Error(`Token approval failed: ${(error as Error).message}`);
         }
 
         await this.publicClient.waitForTransactionReceipt({ hash });
@@ -259,52 +322,44 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
     }
 
     async getReserves(token: Token): Promise<Reserve> {
-        try {
-            const data = await this.publicClient?.readContract({
-                address: this.contractAddress,
-                abi: ABI,
-                functionName: 'reserves',
-                args: [token.address]
-            })
-
-            if (!data) throw new Error(`Error fetching reserves`);
-            return {
-                tokenReserve: data![1].toString(),
-                ethReserve: data![0].toString()
+        return this.safeRead(
+            "getReserves",
+            { tokenReserve: "0", ethReserve: "0" },
+            async () => {
+                const data = await this.publicClient!.readContract({
+                    address: this.contractAddress,
+                    abi: ABI,
+                    functionName: "reserves",
+                    args: [token.address],
+                });
+                if (!data) return { tokenReserve: "0", ethReserve: "0" };
+                return { tokenReserve: data[1].toString(), ethReserve: data[0].toString() };
             }
-        } catch (error) {
-            throw new Error(`Error fetching reserves: ${(error as Error).message}`);
-        }
+        );
     }
 
     async getBuyPrice(token: Token): Promise<string> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getBuyPrice", "0", async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'priceBuy',
+                functionName: "priceBuy",
                 args: [token.address],
             });
-            if (!data) throw new Error(`Error fetching buy price`);
-            return data!.toString();
-        } catch (error) {
-            throw new Error(`Error fetching buy price: ${(error as Error).message}`);
-        }
+            return data != null ? data.toString() : "0";
+        });
     }
 
     async getSellPrice(token: Token): Promise<string> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getSellPrice", "0", async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'priceSell',
+                functionName: "priceSell",
                 args: [token.address],
             });
-            if (!data) throw new Error("No data returned from readContract");
-            return data!.toString();
-        } catch (error) {
-            throw new Error(`Error fetching sell price: ${(error as Error).message}`);
-        }
+            return data != null ? data.toString() : "0";
+        });
     }
 
     async getUserBalance(token: Token, user: Address): Promise<Reserve> {
@@ -324,18 +379,16 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
         }
     }
 
-    async getTokenRatio(token: Token): Promise<string> { //1 token = ? ETH
-        try {
-            const data = await this.publicClient?.readContract({
+    async getTokenRatio(token: Token): Promise<string> {
+        return this.safeRead("getTokenRatio", "0", async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'tokenPerETHRatio',
-                args: [token.address]
+                functionName: "tokenPerETHRatio",
+                args: [token.address],
             });
-            return data!.toString();
-        } catch (error) {
-            throw new Error(`Error fetching token ratio: ${(error as Error).message}`);
-        }
+            return data != null ? data.toString() : "0";
+        });
     }
 
     private getTotalLiquidity(avgPrice: string, reserve: Reserve): string {
@@ -362,26 +415,19 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
     }
 
     async getBuyTradeEventLogs(fromBlock: number, toBlock: number, token?: Token, user?: Address): Promise<BuyTrade[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("getBuyTradeEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event BuyTrade(address indexed token, address indexed trader, uint256 amountEther, uint256 amountToken, uint256 tradeBuyPrice, uint256 updatedBuyPrice, uint256 sellPrice)'),
-                args: {
-                    token: (token?.address as Address),
-                    trader: user as Address | undefined
-                },
-                strict: true
+                event: parseAbiItem("event BuyTrade(address indexed token, address indexed trader, uint256 amountEther, uint256 amountToken, uint256 tradeBuyPrice, uint256 updatedBuyPrice, uint256 sellPrice)"),
+                args: { token: token?.address as Address, trader: user as Address | undefined },
+                strict: true,
             });
             let result: BuyTrade[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(async (log) => await this.getBlockTimestamp(log.blockNumber))
-            );
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
             if (!token) {
-                const tokens = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.token as Address))
-                )
+                const tokens = await Promise.all((logs || []).map((log) => this.getToken(log.args.token as Address)));
                 result = (logs || []).map((log, index) => ({
                     token: tokens[index],
                     buyPrice: log.args.tradeBuyPrice.toString(),
@@ -393,7 +439,7 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 return result;
             }
             result = (logs || []).map((log, index) => ({
-                token: token,
+                token,
                 buyPrice: log.args.tradeBuyPrice.toString(),
                 updatedBuyPrice: log.args.updatedBuyPrice.toString(),
                 ethAmount: log.args.amountEther.toString(),
@@ -401,32 +447,23 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 timestamp: timestamps[index],
             }));
             return result;
-        } catch (error) {
-            throw new Error(`Error fetching 24h volume: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getSellTradeEventLogs(fromBlock: number, toBlock: number, token?: Token, user?: Address): Promise<SellTrade[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("getSellTradeEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event SellTrade(address indexed token, address indexed trader, uint256 amountToken, uint256 amountEther, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 buyPrice)'),
-                args: {
-                    token: (token?.address as Address),
-                    trader: user as Address | undefined
-                },
-                strict: true
+                event: parseAbiItem("event SellTrade(address indexed token, address indexed trader, uint256 amountToken, uint256 amountEther, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 buyPrice)"),
+                args: { token: token?.address as Address, trader: user as Address | undefined },
+                strict: true,
             });
             let result: SellTrade[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-            );
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
             if (!token) {
-                const tokens = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.token as Address))
-                )
+                const tokens = await Promise.all((logs || []).map((log) => this.getToken(log.args.token as Address)));
                 result = (logs || []).map((log, index) => ({
                     token: tokens[index],
                     sellPrice: log.args.tradeSellPrice.toString(),
@@ -438,7 +475,7 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 return result;
             }
             result = (logs || []).map((log, index) => ({
-                token: token,
+                token,
                 sellPrice: log.args.tradeSellPrice.toString(),
                 updatedSellPrice: log.args.updatedSellPrice.toString(),
                 ethAmount: log.args.amountEther.toString(),
@@ -446,32 +483,23 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 buyPrice: log.args.buyPrice.toString(),
             }));
             return result;
-        } catch (error) {
-            throw new Error(`Error fetching 24h volume: ${(error as Error).message}`);
-        }
+        });
     }
 
     private async swapInEventLogs(fromBlock: number, toBlock: number, tokenIn: Token): Promise<SwapTrade[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("swapInEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)'),
-                args: {
-                    tokenSold: tokenIn.address as Address,
-                },
-                strict: true
+                event: parseAbiItem("event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)"),
+                args: { tokenSold: tokenIn.address as Address },
+                strict: true,
             });
-            let result: SwapTrade[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-            );
-            const tokensOut = await Promise.all(
-                (logs || []).map(async (log) => await this.getToken(log.args.tokenBought as Address))
-            )
-            result = (logs || []).map((log, index) => ({
-                tokenIn: tokenIn,
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
+            const tokensOut = await Promise.all((logs || []).map((log) => this.getToken(log.args.tokenBought as Address)));
+            return (logs || []).map((log, index) => ({
+                tokenIn,
                 tokenOut: tokensOut[index],
                 amountIn: log.args.amountTokenSold.toString(),
                 amountOut: log.args.amountTokenBought.toString(),
@@ -481,33 +509,23 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 updatedSellPrice: log.args.updatedSellPrice.toString(),
                 timestamp: timestamps[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching 24h volume: ${(error as Error).message}`);
-        }
+        });
     }
 
     private async swapOutEventLogs(fromBlock: number, toBlock: number, tokenOut: Token): Promise<SwapTrade[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("swapOutEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)'),
-                args: {
-                    tokenBought: tokenOut.address as Address,
-                },
-                strict: true
+                event: parseAbiItem("event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)"),
+                args: { tokenBought: tokenOut.address as Address },
+                strict: true,
             });
-            let result: SwapTrade[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-            );
-            const tokensIn = await Promise.all(
-                (logs || []).map(async (log) => await this.getToken(log.args.tokenSold as Address))
-            )
-            result = (logs || []).map((log, index) => ({
-                tokenOut: tokenOut,
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
+            const tokensIn = await Promise.all((logs || []).map((log) => this.getToken(log.args.tokenSold as Address)));
+            return (logs || []).map((log, index) => ({
+                tokenOut,
                 tokenIn: tokensIn[index],
                 amountIn: log.args.amountTokenSold.toString(),
                 amountOut: log.args.amountTokenBought.toString(),
@@ -517,37 +535,25 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 updatedSellPrice: log.args.updatedSellPrice.toString(),
                 timestamp: timestamps[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching 24h volume: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getSwapTradeEventLogs(fromBlock: number, toBlock: number, token?: Token, user?: Address): Promise<SwapTrade[]> {
-        try {
+        return this.safeRead("getSwapTradeEventLogs", [], async () => {
             if (user) {
-                const logs = await this.publicClient?.getLogs({
+                const logs = await this.publicClient!.getLogs({
                     address: this.contractAddress,
                     fromBlock: BigInt(fromBlock),
                     toBlock: BigInt(toBlock),
-                    event: parseAbiItem('event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)'),
-                    args: {
-                        trader: user as Address,
-                    },
-                    strict: true
+                    event: parseAbiItem("event SwapTrade(address indexed tokenSold, address indexed tokenBought, address indexed trader, uint256 amountTokenSold, uint256 amountTokenBought, uint256 tradeSellPrice, uint256 updatedSellPrice, uint256 tradeBuyPrice, uint256 updatedBuyPrice)"),
+                    args: { trader: user as Address },
+                    strict: true,
                 });
-                let result: SwapTrade[] = [];
-                const timestamps = await Promise.all(
-                    (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-                );
-                const tokensIn = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.tokenSold as Address))
-                )
-                const tokensOut = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.tokenBought as Address))
-                )
-                result = (logs || []).map((log, index) => ({
-                    token: token,
+                const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
+                const tokensIn = await Promise.all((logs || []).map((log) => this.getToken(log.args.tokenSold as Address)));
+                const tokensOut = await Promise.all((logs || []).map((log) => this.getToken(log.args.tokenBought as Address)));
+                return (logs || []).map((log, index) => ({
+                    token,
                     tokenIn: tokensIn[index],
                     tokenOut: tokensOut[index],
                     amountIn: log.args.amountTokenSold.toString(),
@@ -558,38 +564,31 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                     updatedSellPrice: log.args.updatedSellPrice.toString(),
                     timestamp: timestamps[index],
                 }));
-                return result;
             }
             const swapInTrades = await this.swapInEventLogs(fromBlock, toBlock, token! as Token);
             const swapOutTrades = await this.swapOutEventLogs(fromBlock, toBlock, token! as Token);
             return swapInTrades.concat(swapOutTrades);
-        } catch (error) {
-            throw new Error(`Error fetching swap trade logs: ${(error as Error).message}`);
-        }
+        });
     }
 
     private async get24hBeforeBlock(): Promise<bigint> {
-        try {
-            let lowBlock = BigInt(0);
-            let highBlock = await this.publicClient?.getBlockNumber() as bigint;
-            while (lowBlock <= highBlock) {
-                const midBlock = Math.round(Number(lowBlock + highBlock) / 2);
-                const midTimestamp = await this.getBlockTimestamp(BigInt(midBlock));
-                if (Date.now() - midTimestamp < 24 * 60 * 60 * 1000) {
-                    highBlock = BigInt(midBlock) - BigInt(1);
-                } else {
-                    lowBlock = BigInt(midBlock) + BigInt(1);
-                }
+        let lowBlock = BigInt(0);
+        let highBlock = (await this.publicClient!.getBlockNumber()) as bigint;
+        while (lowBlock <= highBlock) {
+            const midBlock = Math.round(Number(lowBlock + highBlock) / 2);
+            const midTimestamp = await this.getBlockTimestamp(BigInt(midBlock));
+            if (Date.now() - midTimestamp < 24 * 60 * 60 * 1000) {
+                highBlock = BigInt(midBlock) - BigInt(1);
+            } else {
+                lowBlock = BigInt(midBlock) + BigInt(1);
             }
-            return lowBlock;
-        } catch (error) {
-            throw new Error(`Error fetching 24h behind block: ${(error as Error).message}`);
         }
+        return lowBlock;
     }
 
     private async get24hVolume(token: Token): Promise<string> {
-        try {
-            const toBlock = await this.publicClient?.getBlockNumber();
+        return this.safeRead("get24hVolume", "0", async () => {
+            const toBlock = await this.publicClient!.getBlockNumber();
             const fromBlock = await this.get24hBeforeBlock();
             const BLOCK_BATCH_SIZE = 999;
             let currentBlock = Number(fromBlock);
@@ -601,27 +600,20 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
 
             while (currentBlock < targetBlock) {
                 const batchEndBlock = Math.min(currentBlock + BLOCK_BATCH_SIZE, targetBlock);
-
                 const [batchBuyLogs, batchSellLogs, batchSwapLogs] = await Promise.all([
                     this.getBuyTradeEventLogs(currentBlock, batchEndBlock, token),
                     this.getSellTradeEventLogs(currentBlock, batchEndBlock, token),
-                    this.getSwapTradeEventLogs(currentBlock, batchEndBlock, token)
+                    this.getSwapTradeEventLogs(currentBlock, batchEndBlock, token),
                 ]);
-
                 buyLogs = buyLogs.concat(batchBuyLogs);
                 sellLogs = sellLogs.concat(batchSellLogs);
                 swapLogs = swapLogs.concat(batchSwapLogs);
-
                 currentBlock = batchEndBlock + 1;
             }
             let volume = 0;
-            buyLogs.forEach(log => {
-                volume += Number(log.ethAmount);
-            });
-            sellLogs.forEach(log => {
-                volume += Number(log.ethAmount);
-            });
-            swapLogs.forEach(log => {
+            buyLogs.forEach((log) => { volume += Number(log.ethAmount); });
+            sellLogs.forEach((log) => { volume += Number(log.ethAmount); });
+            swapLogs.forEach((log) => {
                 if (log.tokenIn.address === token.address) {
                     volume += (Number(log.amountIn) * Number(log.sellPrice)) / 1e18;
                 } else if (log.tokenOut.address === token.address) {
@@ -629,113 +621,112 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
                 }
             });
             return volume.toString();
-        } catch (error) {
-            throw new Error(`Error fetching 24h volume: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getLastExchangeTimestamp(token: Token): Promise<number> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getLastExchangeTimestamp", 0, async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'pools',
-                args: [token.address]
+                functionName: "pools",
+                args: [token.address],
             });
-            return Number(data![2]) * 1000;
-        } catch (error) {
-            throw new Error(`Error fetching last exchange timestamp: ${(error as Error).message}`);
-        }
+            return data ? Number(data[2]) * 1000 : 0;
+        });
     }
 
     async getDepositEventLogs(fromBlock: number, toBlock: number, token?: Token, user?: Address): Promise<Deposit[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("getDepositEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event Deposit(address indexed token, address indexed user, uint256 amountEther, uint256 amountToken, uint256 lpTokensMinted)'),
-                args: {
-                    token: (token?.address as Address),
-                    user: user as Address | undefined
-                },
-                strict: true
+                event: parseAbiItem("event Deposit(address indexed token, address indexed user, uint256 amountEther, uint256 amountToken, uint256 lpTokensMinted)"),
+                args: { token: token?.address as Address, user: user as Address | undefined },
+                strict: true,
             });
-            let result: Deposit[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-            );
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
             if (!token) {
-                const tokens = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.token as Address))
-                )
-                result = (logs || []).map((log, index) => ({
+                const tokens = await Promise.all((logs || []).map((log) => this.getToken(log.args.token as Address)));
+                return (logs || []).map((log, index) => ({
                     token: tokens[index],
                     ethAmount: log.args.amountEther.toString(),
                     tokenAmount: log.args.amountToken.toString(),
                     lpTokensMinted: log.args.lpTokensMinted.toString(),
                     timestamp: timestamps[index],
                 }));
-                return result;
             }
-            result = (logs || []).map((log, index) => ({
-                token: token,
+            return (logs || []).map((log, index) => ({
+                token,
                 ethAmount: log.args.amountEther.toString(),
                 tokenAmount: log.args.amountToken.toString(),
                 lpTokensMinted: log.args.lpTokensMinted.toString(),
                 timestamp: timestamps[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching deposit logs: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getWithdrawEventLogs(fromBlock: number, toBlock: number, token?: Token, user?: Address): Promise<Withdraw[]> {
-        try {
-            const logs = await this.publicClient?.getLogs({
+        return this.safeRead("getWithdrawEventLogs", [], async () => {
+            const logs = await this.publicClient!.getLogs({
                 address: this.contractAddress,
                 fromBlock: BigInt(fromBlock),
                 toBlock: BigInt(toBlock),
-                event: parseAbiItem('event Withdraw(address indexed token, address indexed user, uint256 amountEther, uint256 amountToken, uint256 lpTokensBurned)'),
-                args: {
-                    token: (token?.address as Address),
-                    user: user as Address | undefined
-                },
-                strict: true
+                event: parseAbiItem("event Withdraw(address indexed token, address indexed user, uint256 amountEther, uint256 amountToken, uint256 lpTokensBurned)"),
+                args: { token: token?.address as Address, user: user as Address | undefined },
+                strict: true,
             });
-            let result: Withdraw[] = [];
-            const timestamps = await Promise.all(
-                (logs || []).map(log => this.getBlockTimestamp(log.blockNumber))
-            );
+            const timestamps = await Promise.all((logs || []).map((log) => this.getBlockTimestamp(log.blockNumber)));
             if (!token) {
-                const tokens = await Promise.all(
-                    (logs || []).map(async (log) => await this.getToken(log.args.token as Address))
-                )
-                result = (logs || []).map((log, index) => ({
+                const tokens = await Promise.all((logs || []).map((log) => this.getToken(log.args.token as Address)));
+                return (logs || []).map((log, index) => ({
                     token: tokens[index],
                     ethAmount: log.args.amountEther.toString(),
                     tokenAmount: log.args.amountToken.toString(),
                     lpTokensBurnt: log.args.lpTokensBurned.toString(),
                     timestamp: timestamps[index],
                 }));
-                return result;
             }
-            result = (logs || []).map((log, index) => ({
-                token: token,
+            return (logs || []).map((log, index) => ({
+                token,
                 ethAmount: log.args.amountEther.toString(),
                 tokenAmount: log.args.amountToken.toString(),
                 lpTokensBurnt: log.args.lpTokensBurned.toString(),
                 timestamp: timestamps[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching withdraw logs: ${(error as Error).message}`);
-        }
+        });
+    }
+
+    /** Default pool shape when contract returns no data (pool not instantiated / new user). */
+    private buildDefaultPool(token: Token): Pool {
+        const reserve: Reserve = { tokenReserve: "0", ethReserve: "0" };
+        const lpToken: LiquidityPoolToken = {
+            address: token.address,
+            symbol: "LP",
+            name: "LP Token",
+            decimals: 18,
+            totalSupply: "0",
+            balance: "0",
+        };
+        return {
+            token,
+            reserve,
+            lpToken,
+            buyPrice: "0",
+            sellPrice: "0",
+            avgPrice: "0",
+            tokenRatio: "0",
+            volume24h: "0",
+            totalLiquidty: "0",
+            apr: 0,
+            lastExchangeTs: 0,
+            lastUpdated: Date.now(),
+        };
     }
 
     async getPool(token: Token, user: Address): Promise<Pool> {
-        try {
+        return this.safeRead("getPool", this.buildDefaultPool(token), async () => {
             const lpToken = await this.getLPToken(token, user);
             const reserve = await this.getReserves(token);
             const buyPrice = await this.getBuyPrice(token);
@@ -745,194 +736,160 @@ private async approveToken(token: string, amount: bigint): Promise<void> {
             const avgPrice = this.getAvgPrice(buyPrice, sellPrice);
             const totalLiquidity = this.getTotalLiquidity(avgPrice, reserve);
             const feeEventsCount = await this.getPoolFeeEventsCount(token);
-            const poolFeesEvents = feeEventsCount > 0 ? await this.getPoolFeeEvents(token, Math.max(feeEventsCount - 10, 0), feeEventsCount - 1) : 0;
-            const poolYield = feeEventsCount > 0 ? this.getYield(poolFeesEvents as PoolFeesEvent[], totalLiquidity) : 0;
+            const poolFeesEvents = feeEventsCount > 0 ? await this.getPoolFeeEvents(token, Math.max(feeEventsCount - 10, 0), feeEventsCount - 1) : [];
+            const poolYield = feeEventsCount > 0 && poolFeesEvents.length > 0 ? this.getYield(poolFeesEvents, totalLiquidity) : 0;
             const apr = this.getAPR(String(poolYield));
             const lastExchangeTs = await this.getLastExchangeTimestamp(token);
 
             return {
-                token: token,
-                reserve: reserve,
-                lpToken: lpToken,
-                buyPrice: buyPrice,
-                sellPrice: sellPrice,
-                avgPrice: avgPrice,
-                tokenRatio: tokenRatio,
-                volume24h: volume24h,
+                token,
+                reserve,
+                lpToken,
+                buyPrice,
+                sellPrice,
+                avgPrice,
+                tokenRatio,
+                volume24h,
                 totalLiquidty: totalLiquidity,
                 apr: Number(apr),
-                lastExchangeTs: lastExchangeTs,
-                lastUpdated: Date.now()
-            }
-        } catch (error) {
-            throw new Error(`Error fetching pool data: ${(error as Error).message}`);
-        }
+                lastExchangeTs,
+                lastUpdated: Date.now(),
+            };
+        });
     }
 
     async getPools(startIndex: number, offset: number): Promise<RowPool[]> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getPools", [], async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getPoolList',
-                args: [BigInt(startIndex), BigInt(offset)]
+                functionName: "getPoolList",
+                args: [BigInt(startIndex), BigInt(offset)],
             });
-            const tokens = await Promise.all(
-                (data as Address[]).map(async (addr) => await this.getToken(addr as Address))
-            );
-            const buyPrices = await Promise.all(
-                tokens.map(async (token) => await this.getBuyPrice(token))
-            );
-            const sellPrices = await Promise.all(
-                tokens.map(async (token) => await this.getSellPrice(token))
-            );
-            const reserves = await Promise.all(
-                tokens.map(async (token) => await this.getReserves(token))
-            );
+            const addresses = (data as Address[]) ?? [];
+            if (addresses.length === 0) return [];
+            const tokens = await Promise.all(addresses.map((addr) => this.getToken(addr as Address)));
+            const buyPrices = await Promise.all(tokens.map((t) => this.getBuyPrice(t)));
+            const sellPrices = await Promise.all(tokens.map((t) => this.getSellPrice(t)));
+            const reserves = await Promise.all(tokens.map((t) => this.getReserves(t)));
             const liquidity = await Promise.all(
-                tokens.map(async (token, index) => await this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index]))
+                tokens.map((token, index) =>
+                    this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index])
+                )
             );
-            const result = (tokens || []).map((token, index) => ({
-                token: token,
+            return tokens.map((token, index) => ({
+                token,
                 buyPrice: buyPrices[index],
                 sellPrice: sellPrices[index],
                 totalLiquidity: liquidity[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching pools: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getUserPools(user: Address, startIndex: number, offset: number): Promise<RowPool[]> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getUserPools", [], async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getUserPools',
-                args: [user, BigInt(startIndex), BigInt(offset)]
+                functionName: "getUserPools",
+                args: [user, BigInt(startIndex), BigInt(offset)],
             });
-            const tokens = await Promise.all(
-                (data as Address[]).map(async (addr) => await this.getToken(addr as Address))
-            );
-            const buyPrices = await Promise.all(
-                tokens.map(async (token) => await this.getBuyPrice(token))
-            );
-            const sellPrices = await Promise.all(
-                tokens.map(async (token) => await this.getSellPrice(token))
-            );
-            const reserves = await Promise.all(
-                tokens.map(async (token) => await this.getReserves(token))
-            );
+            const addresses = (data as Address[]) ?? [];
+            if (addresses.length === 0) return [];
+            const tokens = await Promise.all(addresses.map((addr) => this.getToken(addr as Address)));
+            const buyPrices = await Promise.all(tokens.map((t) => this.getBuyPrice(t)));
+            const sellPrices = await Promise.all(tokens.map((t) => this.getSellPrice(t)));
+            const reserves = await Promise.all(tokens.map((t) => this.getReserves(t)));
             const liquidity = await Promise.all(
-                tokens.map(async (token, index) => await this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index]))
+                tokens.map((token, index) =>
+                    this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index])
+                )
             );
-            const lpTokens = await Promise.all(
-                tokens.map(async (token) => await this.getLPToken(token, user))
-            );
-            const result = (tokens || []).map((token, index) => ({
-                token: token,
+            const lpTokens = await Promise.all(tokens.map((token) => this.getLPToken(token, user)));
+            return tokens.map((token, index) => ({
+                token,
                 buyPrice: buyPrices[index],
                 sellPrice: sellPrices[index],
                 totalLiquidity: liquidity[index],
-                lpToken: lpTokens[index]
+                lpToken: lpTokens[index],
             }));
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching pools: ${(error as Error).message}`);
-        }
+        });
     }
 
     async getPoolCount(): Promise<number> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getPoolCount", 0, async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getTotalPools',
-                args: []
+                functionName: "getTotalPools",
+                args: [],
             });
-            return Number(data);
-        } catch (error) {
-            throw new Error(`Error fetching pool count: ${(error as Error).message}`);
-        }
+            return data != null ? Number(data) : 0;
+        });
     }
 
     async getUserPoolCount(user: Address): Promise<number> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getUserPoolCount", 0, async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getUserTotalPools',
-                args: [user]
+                functionName: "getUserTotalPools",
+                args: [user],
             });
-            return Number(data);
-        } catch (error) {
-            throw new Error(`Error fetching user pool count: ${(error as Error).message}`);
-        }
+            return data != null ? Number(data) : 0;
+        });
     }
 
     async getTotalFees(): Promise<string> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getTotalFees", "0", async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'totalFees',
-                args: []
+                functionName: "totalFees",
+                args: [],
             });
-            return String(data);
-        } catch (error) {
-            throw new Error(`Error fetching total fee: ${(error as Error).message}`);
-        }
+            return data != null ? String(data) : "0";
+        });
     }
 
     async getTotalPoolFee(token: Token): Promise<string> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getTotalPoolFee", "0", async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'totalPoolFees',
-                args: [token.address]
+                functionName: "totalPoolFees",
+                args: [token.address],
             });
-            return String(data);
-        } catch (error) {
-            throw new Error(`Error fetching total pool fee: ${(error as Error).message}`);
-        }
+            return data != null ? String(data) : "0";
+        });
     }
 
     private async getPoolFeeEventsCount(token: Token): Promise<number> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getPoolFeeEventsCount", 0, async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getPoolFeeEventsCount',
-                args: [token.address]
+                functionName: "getPoolFeeEventsCount",
+                args: [token.address],
             });
-            return Number(data);
-        } catch (error) {
-            throw new Error(`Error fetching pool fee events count: ${(error as Error).message}`);
-        }
+            return data != null ? Number(data) : 0;
+        });
     }
 
     async getPoolFeeEvents(token: Token, startIndex: number, endIndex: number): Promise<PoolFeesEvent[]> {
-        try {
-            const data = await this.publicClient?.readContract({
+        return this.safeRead("getPoolFeeEvents", [], async () => {
+            const data = await this.publicClient!.readContract({
                 address: this.contractAddress,
                 abi: ABI,
-                functionName: 'getPoolFeeList',
-                args: [token.address, BigInt(startIndex), BigInt(endIndex)]
+                functionName: "getPoolFeeList",
+                args: [token.address, BigInt(startIndex), BigInt(endIndex)],
             });
-            const result: PoolFeesEvent[] = [];
-            if (!data) throw new Error("No data returned from readContract");
-            for (let i = 0; i < (data).length; i++) {
-                result.push({
-                    timestamp: Number(data[i].timestamp) * 1000,
-                    fee: (data[i].fee).toString(),
-                });
-            }
-            return result;
-        } catch (error) {
-            throw new Error(`Error fetching pool fee events: ${(error as Error).message}`);
-        }
+            if (!data || !Array.isArray(data)) return [];
+            return data.map((item: { timestamp: bigint; fee: bigint }) => ({
+                timestamp: Number(item.timestamp) * 1000,
+                fee: item.fee.toString(),
+            }));
+        });
     }
 
     public getYield(feeEvents: PoolFeesEvent[], totalLiquidity: string): number {
