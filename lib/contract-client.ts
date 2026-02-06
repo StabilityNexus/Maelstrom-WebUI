@@ -19,7 +19,7 @@ export class ContractClient implements IContractClient {
 
     private async approveToken(token: string, amount: bigint): Promise<void> {
         try {
-            await this.writeContract({
+            const hash = await this.writeContract({
                 address: token as Address,
                 abi: erc20Abi,
                 functionName: 'approve',
