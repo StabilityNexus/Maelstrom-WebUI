@@ -454,7 +454,9 @@ export function SwapInterface() {
           totalPoolsCount - 1
         );
         const newPools = await contractClient.getPools(startIndex, endIndex);
-        if (newPools.length === 0) break; // No more pools to load
+          if (!newPools || newPools.length === 0) {
+            break;
+          } 
 
         allPools = [...allPools, ...newPools];
         setTokens(allPools);
