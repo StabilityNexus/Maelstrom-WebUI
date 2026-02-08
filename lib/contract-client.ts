@@ -101,9 +101,12 @@ export class ContractClient implements IContractClient {
             functionName: 'poolToken',
             args: [token]
         });
-        console.log("isPoolInstantiated data:", data);
-        if (data && data === "0x0000000000000000000000000000000000000000") return false;
-        return true;
+
+        if (!data) {
+            throw new Error("Failed to read poolToken from contract");
+        }
+
+        return data !== "0x0000000000000000000000000000000000000000";
     }
 
     async initializePool(initPool: InitPool): Promise<InitPoolResult> {
