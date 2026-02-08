@@ -38,7 +38,7 @@ export function SwapInterface() {
   const publicClient = usePublicClient();
   const contractClient = useMemo(
     () => new ContractClient(writeContractAsync, publicClient, chainId),
-    [chainId]
+    [chainId, writeContractAsync, publicClient]
   );
   const { chain } = useAccount();
   const baseUrl = chain?.blockExplorers?.default.url;
