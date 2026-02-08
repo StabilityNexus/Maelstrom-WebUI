@@ -83,21 +83,23 @@ export class ContractClient implements IContractClient {
 
     private async approveToken(token: string, amount: bigint): Promise<void> {
         try {
-            await this.writeContract({
+            const hash = await this.writeContract({
                 address: token as Address,
                 abi: erc20Abi,
-                functionName: 'approve',
-                args: [this.contractAddress, amount]
-            })
+                functionName: "approve",
+                args: [this.contractAddress, amount],
+            });
+    
+            if (!this.publicClient) {
+                throw new Error("Public client is not available");
+            }
+    
+            await this.publicClient.waitForTransactionReceipt({ hash });
         } catch (error) {
             throw new Error(`Token approval failed: ${(error as Error).message}`);
         }
-
-        await this.publicClient.waitForTransactionReceipt({ hash });
-    } catch (error) {
-        throw new Error(`Token approval failed: ${(error as Error).message}`);
     }
-}
+
 
     async isPoolInstantiated(token: Address): Promise<boolean> {
         const data = await this.publicClient?.readContract({
