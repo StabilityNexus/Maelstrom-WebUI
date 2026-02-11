@@ -127,7 +127,7 @@ pnpm dev
 
 #### 4. Open your Browser
 
-Navigate to [http://localhost:3000](http://localhost:3000) to see the application.
+Navigate to [http://localhost:3000](http://localhost:3000) to see the application..
 
 ---
 
