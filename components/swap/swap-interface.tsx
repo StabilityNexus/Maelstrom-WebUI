@@ -311,12 +311,12 @@ export function SwapInterface() {
       return;
     }
     setLoading(true);
-
     // Calculate minimum tokens out with slippage tolerance
-    const amountOutNum = parseFloat(swapState.amountOut);
-    const effectiveSlippage = zeroSlippageMode ? 0 : slippageTolerance;
-    const slippageMultiplier = (100 - effectiveSlippage) / 100;
-    const minimumTokenOut = (amountOutNum * slippageMultiplier).toString();
+    try {
+      const amountOutNum = parseFloat(swapState.amountOut);
+      const effectiveSlippage = zeroSlippageMode ? 0 : slippageTolerance;
+      const slippageMultiplier = (100 - effectiveSlippage) / 100;
+      const minimumTokenOut = (amountOutNum * slippageMultiplier).toString();
 
     if (
       swapState.tokenIn.symbol == "ETH" ||
@@ -328,7 +328,9 @@ export function SwapInterface() {
           amountIn: (Math.round(Number(swapState.amountIn) * 1e18 )).toString(),
           minimumAmountToBuy: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
         };
+
         const result = await contractClient.buy(buyRequest);
+
         if (result.success) {
           toast.success(
             <div>
@@ -362,6 +364,7 @@ export function SwapInterface() {
           minimumEthAmount: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
         };
         const result = await contractClient.sell(sellRequest);
+
         if (result.success) {
           toast.success(
             <div>
@@ -396,6 +399,7 @@ export function SwapInterface() {
       minimumTokenOut: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
     };
     const result = await contractClient.swap(swapRequest);
+
     if (result.success) {
       toast.success(
         <div>
@@ -411,14 +415,17 @@ export function SwapInterface() {
         </div>
       );
     } else {
+        toast.error(`Swap Failed!: ${result.error || "An error occurred."}`);
+      }
+    } catch (error) {
       toast.error(
-        `Swap Failed!: ${
-          result.error || "An error occurred during the swap process."
-        }`
+        error instanceof Error ? error.message : "Transaction failed"
       );
+    } 
+    finally {
+      setLoading(false);
+      setShowPreview(false);
     }
-    setLoading(false);
-    setShowPreview(false);
   };
 
   const getPoolLength = async () => {
