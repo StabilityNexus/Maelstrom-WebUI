@@ -2,7 +2,7 @@ import { ABI, CONTRACT_ADDRESSES, IContractClient } from "@/types/contract";
 import { InitPool, InitPoolResult, Pool, PoolFeesEvent, Reserve, RowPool } from "@/types/pool";
 import { LiquidityPoolToken, Token } from "@/types/token";
 import { BuyRequest, BuyResult, BuyTrade, Deposit, DepositRequest, DepositResult, SellRequest, SellResult, SellTrade, SwapRequest, SwapResult, SwapTrade, Withdraw, WithdrawRequest, WithdrawResult } from "@/types/trades";
-import { Address, erc20Abi, formatEther, parseAbiItem, parseEther } from "viem";
+import { Address, erc20Abi, formatEther, parseAbiItem, parseEther, zeroAddress } from "viem";
 import { Config, UsePublicClientReturnType } from "wagmi";
 import { WriteContractMutateAsync } from "wagmi/query";
 
@@ -95,16 +95,19 @@ export class ContractClient implements IContractClient {
     }
 
     async isPoolInstantiated(token: Address): Promise<boolean> {
-        const data = await this.publicClient?.readContract({
+    return this.safeRead("isPoolInstantiated", false, async () => {
+        const data = await this.publicClient!.readContract({
             address: this.contractAddress,
             abi: ABI,
             functionName: 'poolToken',
             args: [token]
         });
-        console.log("isPoolInstantiated data:", data);
-        if (data && data === "0x0000000000000000000000000000000000000000") return false;
-        return true;
-    }
+
+        if (!data) return false;
+
+        return data !== zeroAddress;
+    });
+}
 
     async initializePool(initPool: InitPool): Promise<InitPoolResult> {
         try {
