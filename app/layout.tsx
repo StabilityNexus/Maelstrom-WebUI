@@ -8,12 +8,31 @@ import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 
 export const metadata: Metadata = {
-  title: "Maelstrom",
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_BASE_URL || "https://maelstrom.stability.nexus"
+  ),
+  title: {
+    default: "Maelstrom | Decentralized Liquidity Protocol",
+    template: "%s | Maelstrom",
+  },
   description:
     "Experience fluid, innovative DeFi trading with advanced liquidity mechanics and seamless user experience.",
   generator: "maelstrom-ui",
-  keywords: ["DeFi", "trading", "liquidity", "blockchain", "swap", "tokens"],
-  authors: [{ name: "Maelstrom Team" }],
+  keywords: [
+    "DeFi",
+    "trading",
+    "liquidity",
+    "blockchain",
+    "swap",
+    "tokens",
+    "AMM",
+    "decentralized exchange",
+    "Stability Nexus",
+    "crypto",
+  ],
+  authors: [{ name: "Stability Nexus Team" }],
+  creator: "Stability Nexus",
+  publisher: "Stability Nexus",
   icons: {
     icon: [{ url: "/logo_maelstrom.svg", type: "image/svg+xml" }],
     shortcut: "/logo_maelstrom.svg",

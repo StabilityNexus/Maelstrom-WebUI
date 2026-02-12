@@ -1,0 +1,11 @@
+# Robots.txt for Maelstrom - DeFi Liquidity Protocol
+# https://maelstrom.stability.nexus
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /_next/
+Disallow: /static/
+
+# Sitemap
+Sitemap: https://maelstrom.stability.nexus/sitemap.xml
