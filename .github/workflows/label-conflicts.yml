@@ -1,0 +1,26 @@
+name: PR Maintenance
+on:
+  # Check when a PR is updated
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  # Crucial: Re-check all PRs when Next.js code is merged to main
+  push:
+    branches: [main]
+
+jobs:
+  conflict-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Update Conflict Labels
+        uses: eps1lon/actions-label-merge-conflict@v3
+        with:
+          dirtyLabel: "status: conflicted"
+          removeOnClean: true
+          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+          # A friendly nudge for the contributor
+          commentOnDirty: |
+            Hello! This PR now has conflicts with the main branch. 
+            Please rebase or merge main into your branch to keep the review process moving! 🚀
