@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TokenSelector } from "./token-selector";
 import { SwapPreviewModal } from "@/components/swap/swap-preview-modal";
 import { toast } from "sonner";
 import { ArrowDownUp, HelpCircle, Settings } from "lucide-react";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { useAccount, useBalance, usePublicClient, useWriteContract } from "wagmi";
 import { ContractClient } from "@/lib/contract-client";
 import { Token, getNativeCurrencyToken } from "@/types/token";
 import { SellRequest, SellResult } from "@/types/trades";
@@ -48,11 +48,15 @@ export function SellForm({
     () => new ContractClient(writeContractAsync, publicClient, chainId),
     [chainId]
   );
-  const { chain } = useAccount();
+  const { chain, address } = useAccount();
   const baseUrl = chain?.blockExplorers?.default.url;
   const nativeCurrencySymbol = chain?.nativeCurrency?.symbol || "ETH";
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const displaySymbol = mounted ? nativeCurrencySymbol : "ETH";
   const [ethAmount, setEthAmount] = useState("");
   const [token, setToken] = useState<Token | undefined>(undefined);
+  const { data: tokenBalance } = useBalance({ address, token: token?.address as `0x${string}` | undefined });
   const [tokenAmount, setTokenAmount] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [isEthInput, setIsEthInput] = useState(false);
@@ -75,7 +79,7 @@ export function SellForm({
       if (Number(ethValue) * 1e18 > Number(ethInReserve) * 0.1) {
         const maxEthAllowed = String((Number(ethInReserve) * 0.1) / 1e18);
         setValidationError(
-          `Amount exceeds 10% of reserve. Maximum: ${maxEthAllowed} ${nativeCurrencySymbol}`
+          `Amount exceeds 10% of reserve. Maximum: ${maxEthAllowed} ${displaySymbol}`
         );
         return "";
       }
@@ -85,7 +89,7 @@ export function SellForm({
       if (Number(value) * 1e18 > Number(ethInReserve) * 0.1) {
         const maxEthAllowed = String((Number(ethInReserve) * 0.1) / 1e18);
         setValidationError(
-          `Amount exceeds 10% of reserve. Maximum: ${maxEthAllowed} ${nativeCurrencySymbol}`
+          `Amount exceeds 10% of reserve. Maximum: ${maxEthAllowed} ${displaySymbol}`
         );
         return "";
       }
@@ -190,7 +194,7 @@ export function SellForm({
                   <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center">
                     <span className="text-sm font-bold text-accent">E</span>
                   </div>
-                  <span className="text-base">{nativeCurrencySymbol}</span>
+                  <span className="text-base">{displaySymbol}</span>
                 </div>
               </Button>
             </>
@@ -206,6 +210,12 @@ export function SellForm({
                   [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none
                   font-plus-jakarta text-white/90 transition-all duration-300"
               />
+              <button
+                onClick={() => tokenBalance && handleInputChange(tokenBalance.formatted)}
+                className="text-xs text-accent-cyan font-medium px-2 hover:text-accent-cyan/80 transition-colors flex-shrink-0"
+              >
+                MAX
+              </button>
               <div className="ml-2">
                 <TokenSelector
                   Tokens={tokens}
@@ -289,7 +299,7 @@ export function SellForm({
                   <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center">
                     <span className="text-sm font-bold text-accent">E</span>
                   </div>
-                  <span className="text-base">{nativeCurrencySymbol}</span>
+                  <span className="text-base">{displaySymbol}</span>
                 </div>
               </Button>
             </>
@@ -303,7 +313,7 @@ export function SellForm({
             <span className="text-white/50 font-medium">Rate</span>
             <span className="text-white/80 font-medium">
               1 {token.symbol.toUpperCase()} ={" "}
-              {Number(ethAmount) / Number(tokenAmount)} {nativeCurrencySymbol}
+              {Number(ethAmount) / Number(tokenAmount)} {displaySymbol}
             </span>
           </div>
           {/* Slippage Tolerance - Only show in Advanced Mode */}
