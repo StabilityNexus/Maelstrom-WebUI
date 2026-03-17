@@ -71,22 +71,24 @@ export function SwapInterface() {
   const tokenInSellPriceForRef = useRef<Token | null>(null);
   const tokenOutBuyPriceForRef = useRef<Token | null>(null);
 
-  const calculateOutput = (amount: string, isInput: boolean) => {
+  const calculateOutput = (amount: string, isInput: boolean, sellPrice?: number, buyPrice?: number) => {
+    const activeSellPrice = sellPrice ?? tokenInSellPrice;
+    const activeBuyPrice = buyPrice ?? tokenOutBuyPrice;
     setValidationError("");
-    if (!amount || !tokenInSellPrice || !tokenOutBuyPrice) return "";
+    if (!amount || !activeSellPrice || !activeBuyPrice) return "";
 
     const amountNum = Number(amount);
     if (isNaN(amountNum) || amountNum <= 0) return "";
 
     if (isInput) {
       // Converting tokenIn to tokenOut: amount * sellPrice / buyPrice
-      const ethAmount = amountNum * tokenInSellPrice;
+      const ethAmount = amountNum * activeSellPrice;
 
       if (ethInReserve) {
         // Ensure we don't exceed the ethIn reserve by more than 10%
         const maxEthAllowed = Number(ethInReserve) * 0.1;
         if (ethAmount > maxEthAllowed) {
-          const maxTokenIn = maxEthAllowed / tokenInSellPrice;
+          const maxTokenIn = maxEthAllowed / activeSellPrice;
           console.log(maxTokenIn);
           setValidationError(
             `Amount exceeds 10% of reserve. Maximum: ${maxTokenIn.toFixed(6)} ${
@@ -97,14 +99,14 @@ export function SwapInterface() {
         }
       }
 
-      const output = ethAmount / tokenOutBuyPrice;
+      const output = ethAmount / activeBuyPrice;
 
       if (tokenOutReserve) {
         // Ensure we don't exceed the tokenOut reserve by more than 10%
         const maxTokenOutAllowed = Number(tokenOutReserve) * 0.1;
         if (output * 1e18 > maxTokenOutAllowed) {
           const maxInput = Math.round(
-            (maxTokenOutAllowed * tokenOutBuyPrice) / tokenInSellPrice
+            (maxTokenOutAllowed * activeBuyPrice) / activeSellPrice
           );
           setValidationError(
             `Output exceeds 10% of reserve. Maximum input: ${formatEther(
@@ -133,13 +135,13 @@ export function SwapInterface() {
         }
       }
 
-      const ethAmount = amountNum * tokenOutBuyPrice;
+      const ethAmount = amountNum * activeBuyPrice;
 
       if (ethInReserve) {
         // Ensure we don't exceed the ethIn reserve by more than 10%
         const maxEthAllowed = Number(ethInReserve) * 0.1;
         if (ethAmount > maxEthAllowed) {
-          const maxTokenOut = maxEthAllowed / tokenOutBuyPrice;
+          const maxTokenOut = maxEthAllowed / activeBuyPrice;
           setValidationError(
             `Output exceeds 10% of reserve. Maximum output: ${maxTokenOut.toFixed(
               6
@@ -149,7 +151,7 @@ export function SwapInterface() {
         }
       }
 
-      const output = ethAmount / tokenInSellPrice;
+      const output = ethAmount / activeSellPrice;
       setValidationError("");
       return output.toString();
     }
@@ -200,7 +202,7 @@ export function SwapInterface() {
           exchangeRate: formattedExchangeRate,
         };
         if (prev.amountIn) {
-          newState.amountOut = calculateOutput(prev.amountIn, true);
+          newState.amountOut = calculateOutput(prev.amountIn, true, newSellPrice, tokenOutBuyPrice);
         }
         return newState;
       });
@@ -239,7 +241,7 @@ export function SwapInterface() {
           exchangeRate: formattedExchangeRate,
         };
         if (prev.amountIn) {
-          newState.amountOut = calculateOutput(prev.amountIn, true);
+          newState.amountOut = calculateOutput(prev.amountIn, true, tokenInSellPrice, newBuyPrice);
         }
         return newState;
       });
