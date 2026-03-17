@@ -33,7 +33,8 @@ interface SwapState {
 const ITEMS_PER_PAGE = 10;
 
 export function SwapInterface() {
-  const { chainId } = useAccount();
+  const [tokenInBalance, setTokenInBalance] = useState<string>("0");
+  const { chainId, address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
   const contractClient = useMemo(
@@ -89,8 +90,7 @@ export function SwapInterface() {
           const maxTokenIn = maxEthAllowed / tokenInSellPrice;
           console.log(maxTokenIn);
           setValidationError(
-            `Amount exceeds 10% of reserve. Maximum: ${maxTokenIn.toFixed(6)} ${
-              swapState.tokenIn?.symbol || ""
+            `Amount exceeds 10% of reserve. Maximum: ${maxTokenIn.toFixed(6)} ${swapState.tokenIn?.symbol || ""
             }`
           );
           return "";
@@ -170,6 +170,39 @@ export function SwapInterface() {
       amountIn: calculateOutput(value, false),
     }));
   };
+  const fetchTokenInBalance = async (token: Token | undefined) => {
+    if (!token || !publicClient || !address) return;
+
+    try {
+      // ETH case
+      if (token.symbol === "ETH") {
+        const balance = await publicClient.getBalance({
+          address: address,
+        });
+        setTokenInBalance(formatEther(balance));
+      } else {
+        // ERC20 case
+        const balance = await publicClient.readContract({
+          address: token.address,
+          abi: [
+            {
+              constant: true,
+              inputs: [{ name: "_owner", type: "address" }],
+              name: "balanceOf",
+              outputs: [{ name: "balance", type: "uint256" }],
+              type: "function",
+            },
+          ],
+          functionName: "balanceOf",
+          args: [address],
+        });
+
+        setTokenInBalance(formatEther(balance as bigint));
+      }
+    } catch (err) {
+      console.error("Error fetching balance:", err);
+    }
+  };
 
   const handletokenInChange = async (token: Token) => {
     try {
@@ -186,6 +219,7 @@ export function SwapInterface() {
       const newExchangeRate = tokenOutBuyPrice / newSellPrice;
 
       setTokenInSellPrice(newSellPrice);
+      fetchTokenInBalance(token);
       tokenInSellPriceForRef.current = token;
       setEthInReserve(reserve?.ethReserve);
 
@@ -209,6 +243,12 @@ export function SwapInterface() {
       console.error(`Error getting exchange rates:,${error}`);
       setFetchingRates(false);
     }
+  };
+
+  const handleMaxClick = () => {
+    if (!tokenInBalance) return;
+
+    handleAmountInChange(tokenInBalance);
   };
 
   const handletokenOutChange = async (token: Token) => {
@@ -318,110 +358,108 @@ export function SwapInterface() {
       const slippageMultiplier = (100 - effectiveSlippage) / 100;
       const minimumTokenOut = (amountOutNum * slippageMultiplier).toString();
 
-    if (
-      swapState.tokenIn.symbol == "ETH" ||
-      swapState.tokenOut.symbol == "ETH"
-    ) {
-      if (swapState.tokenIn.symbol == "ETH") {
-        const buyRequest: BuyRequest = {
-          token: swapState.tokenOut,
-          amountIn: (Math.round(Number(swapState.amountIn) * 1e18 )).toString(),
-          minimumAmountToBuy: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
-        };
+      if (
+        swapState.tokenIn.symbol == "ETH" ||
+        swapState.tokenOut.symbol == "ETH"
+      ) {
+        if (swapState.tokenIn.symbol == "ETH") {
+          const buyRequest: BuyRequest = {
+            token: swapState.tokenOut,
+            amountIn: (Math.round(Number(swapState.amountIn) * 1e18)).toString(),
+            minimumAmountToBuy: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
+          };
 
-        const result = await contractClient.buy(buyRequest);
+          const result = await contractClient.buy(buyRequest);
 
-        if (result.success) {
-          toast.success(
-            <div>
-              <div>Swap Successful! </div>
+          if (result.success) {
+            toast.success(
               <div>
-                <a
-                  href={`${baseUrl}/tx/${result.txHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline text-blue-400"
-                >
-                  View on block explorer
-                </a>
+                <div>Swap Successful! </div>
+                <div>
+                  <a
+                    href={`${baseUrl}/tx/${result.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline text-blue-400"
+                  >
+                    View on block explorer
+                  </a>
+                </div>
               </div>
-            </div>
-          );
-        } else {
-          toast.error(
-            `Swap Failed!: ${
-              result.error || "An error occurred during the swap process."
-            }`
-          );
+            );
+          } else {
+            toast.error(
+              `Swap Failed!: ${result.error || "An error occurred during the swap process."
+              }`
+            );
+          }
+          return;
         }
-        return;
+
+        if (swapState.tokenOut.symbol == "ETH") {
+          const sellRequest: SellRequest = {
+            token: swapState.tokenIn,
+            amountIn: (Math.round(Number(swapState.amountIn) * 1e18)).toString(),
+            minimumEthAmount: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
+          };
+          const result = await contractClient.sell(sellRequest);
+
+          if (result.success) {
+            toast.success(
+              <div>
+                <div>Swap Successful! </div>
+                <div>
+                  <a
+                    href={`${baseUrl}/tx/${result.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline text-blue-400"
+                  >
+                    View on block explorer
+                  </a>
+                </div>
+              </div>
+            );
+          } else {
+            toast.error(
+              `Swap Failed!: ${result.error || "An error occurred during the swap process."
+              }`
+            );
+          }
+          return;
+        }
       }
 
-      if (swapState.tokenOut.symbol == "ETH") {
-        const sellRequest: SellRequest = {
-          token: swapState.tokenIn,
-          amountIn: (Math.round(Number(swapState.amountIn) * 1e18 )).toString(),
-          minimumEthAmount: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
-        };
-        const result = await contractClient.sell(sellRequest);
+      const swapRequest: SwapRequest = {
+        tokenIn: swapState.tokenIn,
+        tokenOut: swapState.tokenOut,
+        amountIn: (Math.round(Number(swapState.amountIn) * 1e18)).toString(),
+        minimumTokenOut: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
+      };
+      const result = await contractClient.swap(swapRequest);
 
-        if (result.success) {
-          toast.success(
-            <div>
-              <div>Swap Successful! </div>
-              <div>
-                <a
-                  href={`${baseUrl}/tx/${result.txHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline text-blue-400"
-                >
-                  View on block explorer
-                </a>
-              </div>
-            </div>
-          );
-        } else {
-          toast.error(
-            `Swap Failed!: ${
-              result.error || "An error occurred during the swap process."
-            }`
-          );
-        }
-        return;
-      }
-    }
-
-    const swapRequest: SwapRequest = {
-      tokenIn: swapState.tokenIn,
-      tokenOut: swapState.tokenOut,
-      amountIn: (Math.round(Number(swapState.amountIn) * 1e18 )).toString(),
-      minimumTokenOut: (Math.round(Number(minimumTokenOut) * 1e18)).toString(),
-    };
-    const result = await contractClient.swap(swapRequest);
-
-    if (result.success) {
-      toast.success(
-        <div>
-          Swap Successful!{" "}
-          <a
-            href={`${baseUrl}/tx/${result.txHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline text-blue-400"
-          >
-            View on block explorer
-          </a>
-        </div>
-      );
-    } else {
+      if (result.success) {
+        toast.success(
+          <div>
+            Swap Successful!{" "}
+            <a
+              href={`${baseUrl}/tx/${result.txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-blue-400"
+            >
+              View on block explorer
+            </a>
+          </div>
+        );
+      } else {
         toast.error(`Swap Failed!: ${result.error || "An error occurred."}`);
       }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Transaction failed"
       );
-    } 
+    }
     finally {
       setLoading(false);
       setShowPreview(false);
@@ -548,11 +586,10 @@ export function SwapInterface() {
                       className="sr-only"
                     />
                     <div
-                      className={`relative w-5 h-5 rounded border-2 transition-all duration-300 flex items-center justify-center ${
-                        zeroSlippageMode
+                      className={`relative w-5 h-5 rounded border-2 transition-all duration-300 flex items-center justify-center ${zeroSlippageMode
                           ? "bg-gradient-to-br from-accent-cyan/20 to-primary-500/20 border-accent-cyan shadow-lg shadow-accent-cyan/25"
                           : "bg-white/5 border-white/20 hover:border-white/30"
-                      }`}
+                        }`}
                     >
                       {zeroSlippageMode && (
                         <svg
@@ -572,16 +609,14 @@ export function SwapInterface() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Shield
-                        className={`h-4 w-4 transition-colors duration-300 ${
-                          zeroSlippageMode
+                        className={`h-4 w-4 transition-colors duration-300 ${zeroSlippageMode
                             ? "text-accent-cyan"
                             : "text-white/40"
-                        }`}
+                          }`}
                       />
                       <span
-                        className={`text-sm font-medium transition-colors duration-300 ${
-                          zeroSlippageMode ? "text-white/90" : "text-white/50"
-                        }`}
+                        className={`text-sm font-medium transition-colors duration-300 ${zeroSlippageMode ? "text-white/90" : "text-white/50"
+                          }`}
                       >
                         Zero Slippage Mode
                       </span>
@@ -614,14 +649,24 @@ export function SwapInterface() {
                           isSwapping
                         }
                         onChange={(e) => handleAmountInChange(e.target.value)}
-                        className={`w-full h-16 text-3xl font-medium bg-black/10 group-hover:bg-black/20 rounded-xl px-4 
-                          border ${
-                            validationError
-                              ? "border-red-500/50 focus:border-red-500/70 focus:ring-2 focus:ring-red-500/20"
-                              : "border-white/[0.05] focus:border-accent-cyan/30 focus:ring-2 focus:ring-accent-cyan/20"
+                        className={`w-full h-16 text-3xl font-medium bg-black/10 group-hover:bg-black/20 rounded-xl px-4 pr-20
+                        border ${validationError
+                            ? "border-red-500/50 focus:border-red-500/70 focus:ring-2 focus:ring-red-500/20"
+                            : "border-white/[0.05] focus:border-accent-cyan/30 focus:ring-2 focus:ring-accent-cyan/20"
                           }
-                          placeholder:text-white/20 transition-all duration-300 font-plus-jakarta`}
+                        placeholder:text-white/20 transition-all duration-300 font-plus-jakarta`}
                       />
+
+                      {/* MAX BUTTON */}
+                      <button
+                        type="button"
+                        onClick={handleMaxClick}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold 
+                        bg-accent-cyan/20 hover:bg-accent-cyan/30 text-accent-cyan 
+                        px-3 py-1 rounded-lg transition-all duration-200"
+                      >
+                        MAX
+                      </button>
                     </div>
                   </div>
 
