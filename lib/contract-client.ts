@@ -34,6 +34,8 @@ function isExpectedReadFailure(error: unknown): boolean {
     );
 }
 
+const tokenCache: Record<string, Token> = {};
+
 export class ContractClient implements IContractClient {
     contractAddress: Address;
     writeContract: WriteContractMutateAsync<Config, unknown>;
@@ -255,39 +257,47 @@ export class ContractClient implements IContractClient {
         }
     }
 
-    async getToken(token: Address): Promise<Token> {
-        try {
-            const [decimals, symbol, name] = await Promise.all([
-                this.publicClient?.readContract({
-                    address: token as Address,
-                    abi: erc20Abi,
-                    functionName: 'decimals',
-                    args: []
-                }),
-                this.publicClient?.readContract({
-                    address: token as Address,
-                    abi: erc20Abi,
-                    functionName: 'symbol',
-                    args: []
-                }),
-                this.publicClient?.readContract({
-                    address: token as Address,
-                    abi: erc20Abi,
-                    functionName: 'name',
-                    args: []
-                })
-            ]);
-
-            return {
-                address: token,
-                symbol: symbol as string,
-                name: name as string,
-                decimals: decimals as number,
-            }
-        } catch (error) {
-            throw new Error(`Error fetching token data: ${(error as Error).message}`);
+    async getToken(address: `0x${string}`): Promise<Token> {
+        if (tokenCache[address]) {
+        return tokenCache[address];
         }
+
+        // FIX: Add a guard to satisfy TypeScript in case publicClient is undefined
+        if (!this.publicClient) {
+        console.warn("Public client is not initialized yet.");
+        // Return a safe fallback so the UI doesn't crash while Wagmi loads
+        return { address, name: "Unknown", symbol: "???", decimals: 18 }; 
+        }
+
+        const tokenAddress = address as `0x${string}`;
+        
+        const erc20Abi = [
+        { type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+        { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+        { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] }
+        ] as const;
+
+        const contracts = [
+        { address: tokenAddress, abi: erc20Abi, functionName: 'name' },
+        { address: tokenAddress, abi: erc20Abi, functionName: 'symbol' },
+        { address: tokenAddress, abi: erc20Abi, functionName: 'decimals' }
+        ];
+
+        // TypeScript now knows this.publicClient is definitely defined here
+        const results = await this.publicClient.multicall({ contracts });
+
+        const token: Token = {
+        address:tokenAddress,
+        name: (results[0].result as string) || "Unknown",
+        symbol: (results[1].result as string) || "???",
+        decimals: (results[2].result as number) || 18,
+        };
+
+        tokenCache[address] = token;
+
+        return token;
     }
+
 
     async getLPToken(token: Token, user: Address): Promise<LiquidityPoolToken> {
         try {
