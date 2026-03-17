@@ -902,7 +902,9 @@ export class ContractClient implements IContractClient {
         feeEvents.forEach(event => {
             totalFees += Number(event.fee);
         });
+        if (feeEvents.length < 2) return 0;
         const totalTime = (feeEvents[feeEvents.length - 1].timestamp - feeEvents[0].timestamp) / (60 * 60 * 24); //days
+        if (totalTime === 0 || Number(totalLiquidity) === 0) return 0;
         return totalFees / (totalTime * Number(totalLiquidity));
     }
 }
