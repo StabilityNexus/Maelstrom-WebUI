@@ -773,21 +773,35 @@ export class ContractClient implements IContractClient {
             });
             const addresses = (data as Address[]) ?? [];
             if (addresses.length === 0) return [];
-            const tokens = await Promise.all(addresses.map((addr) => this.getToken(addr as Address)));
-            const buyPrices = await Promise.all(tokens.map((t) => this.getBuyPrice(t)));
-            const sellPrices = await Promise.all(tokens.map((t) => this.getSellPrice(t)));
-            const reserves = await Promise.all(tokens.map((t) => this.getReserves(t)));
-            const liquidity = await Promise.all(
-                tokens.map((token, index) =>
-                    this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index])
-                )
-            );
-            return tokens.map((token, index) => ({
-                token,
-                buyPrice: buyPrices[index],
-                sellPrice: sellPrices[index],
-                totalLiquidity: liquidity[index],
-            }));
+
+            // Batch all per-token calls into a single multicall
+            const calls = addresses.flatMap((addr) => [
+                { address: addr, abi: erc20Abi, functionName: "name" as const },
+                { address: addr, abi: erc20Abi, functionName: "symbol" as const },
+                { address: addr, abi: erc20Abi, functionName: "decimals" as const },
+                { address: this.contractAddress, abi: ABI, functionName: "priceBuy" as const, args: [addr] },
+                { address: this.contractAddress, abi: ABI, functionName: "priceSell" as const, args: [addr] },
+                { address: this.contractAddress, abi: ABI, functionName: "reserves" as const, args: [addr] },
+            ]);
+            const results = await this.publicClient!.multicall({ contracts: calls });
+
+            return addresses.map((addr, i) => {
+                const b = i * 6;
+                const token: Token = {
+                    address: addr,
+                    name: (results[b].result as string) ?? "Unknown",
+                    symbol: (results[b + 1].result as string) ?? "???",
+                    decimals: (results[b + 2].result as number) ?? 18,
+                };
+                const buyPrice = results[b + 3].result != null ? String(results[b + 3].result) : "0";
+                const sellPrice = results[b + 4].result != null ? String(results[b + 4].result) : "0";
+                const reserveData = results[b + 5].result as [bigint, bigint] | undefined;
+                const reserve: Reserve = reserveData
+                    ? { ethReserve: reserveData[0].toString(), tokenReserve: reserveData[1].toString() }
+                    : { ethReserve: "0", tokenReserve: "0" };
+                const totalLiquidity = this.getTotalLiquidity(this.getAvgPrice(buyPrice, sellPrice), reserve);
+                return { token, buyPrice, sellPrice, totalLiquidity };
+            });
         });
     }
 
@@ -801,23 +815,42 @@ export class ContractClient implements IContractClient {
             });
             const addresses = (data as Address[]) ?? [];
             if (addresses.length === 0) return [];
-            const tokens = await Promise.all(addresses.map((addr) => this.getToken(addr as Address)));
-            const buyPrices = await Promise.all(tokens.map((t) => this.getBuyPrice(t)));
-            const sellPrices = await Promise.all(tokens.map((t) => this.getSellPrice(t)));
-            const reserves = await Promise.all(tokens.map((t) => this.getReserves(t)));
-            const liquidity = await Promise.all(
-                tokens.map((token, index) =>
-                    this.getTotalLiquidity(this.getAvgPrice(buyPrices[index], sellPrices[index]), reserves[index])
-                )
-            );
+
+            // Batch all per-token calls into a single multicall
+            const calls = addresses.flatMap((addr) => [
+                { address: addr, abi: erc20Abi, functionName: "name" as const },
+                { address: addr, abi: erc20Abi, functionName: "symbol" as const },
+                { address: addr, abi: erc20Abi, functionName: "decimals" as const },
+                { address: this.contractAddress, abi: ABI, functionName: "priceBuy" as const, args: [addr] },
+                { address: this.contractAddress, abi: ABI, functionName: "priceSell" as const, args: [addr] },
+                { address: this.contractAddress, abi: ABI, functionName: "reserves" as const, args: [addr] },
+            ]);
+            const results = await this.publicClient!.multicall({ contracts: calls });
+
+            const tokens = addresses.map((addr, i) => {
+                const b = i * 6;
+                return {
+                    address: addr,
+                    name: (results[b].result as string) ?? "Unknown",
+                    symbol: (results[b + 1].result as string) ?? "???",
+                    decimals: (results[b + 2].result as number) ?? 18,
+                } as Token;
+            });
+
             const lpTokens = await Promise.all(tokens.map((token) => this.getLPToken(token, user)));
-            return tokens.map((token, index) => ({
-                token,
-                buyPrice: buyPrices[index],
-                sellPrice: sellPrices[index],
-                totalLiquidity: liquidity[index],
-                lpToken: lpTokens[index],
-            }));
+
+            return addresses.map((addr, i) => {
+                const b = i * 6;
+                const token = tokens[i];
+                const buyPrice = results[b + 3].result != null ? String(results[b + 3].result) : "0";
+                const sellPrice = results[b + 4].result != null ? String(results[b + 4].result) : "0";
+                const reserveData = results[b + 5].result as [bigint, bigint] | undefined;
+                const reserve: Reserve = reserveData
+                    ? { ethReserve: reserveData[0].toString(), tokenReserve: reserveData[1].toString() }
+                    : { ethReserve: "0", tokenReserve: "0" };
+                const totalLiquidity = this.getTotalLiquidity(this.getAvgPrice(buyPrice, sellPrice), reserve);
+                return { token, buyPrice, sellPrice, totalLiquidity, lpToken: lpTokens[i] };
+            });
         });
     }
 
@@ -902,7 +935,9 @@ export class ContractClient implements IContractClient {
         feeEvents.forEach(event => {
             totalFees += Number(event.fee);
         });
+        if (feeEvents.length < 2) return 0;
         const totalTime = (feeEvents[feeEvents.length - 1].timestamp - feeEvents[0].timestamp) / (60 * 60 * 24); //days
+        if (totalTime === 0 || Number(totalLiquidity) === 0) return 0;
         return totalFees / (totalTime * Number(totalLiquidity));
     }
 }
