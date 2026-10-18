@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { WalletButton } from "@/components/wallet-button";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { useState } from "react";
@@ -78,7 +78,7 @@ export function Header() {
             </button>
 
             <div className="hidden md:block">
-              <ConnectButton accountStatus={"address"} showBalance={false} />
+              <WalletButton />
             </div>
           </div>
         </div>
@@ -118,7 +118,7 @@ export function Header() {
               ))}
 
               <div className="pt-4 border-t border-border/40">
-                <ConnectButton accountStatus={"address"} showBalance={false} />
+                <WalletButton />
               </div>
             </nav>
           </div>

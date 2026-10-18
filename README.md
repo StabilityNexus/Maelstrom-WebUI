@@ -60,7 +60,7 @@ The platform is powered by smart contracts that implement:
 - **Seamless Token Swaps:** Trade tokens with minimal slippage through optimized liquidity mechanics
 - **Liquidity Provider Rewards:** Earn LP tokens and yield by providing liquidity to pools
 - **Dynamic Pricing:** Real-time price discovery based on bonding curve algorithms
-- **Wallet Integration:** Seamless MetaMask and Web3 wallet support via RainbowKit
+- **Wallet Integration:** Seamless MetaMask and Web3 wallet support via WalletLink (EIP-6963, no relay or projectId)
 - **Transparent Analytics:** Real-time pool statistics, volume tracking, and trade history
 - **Flexible Trading:** Buy, sell, or swap tokens directly through intuitive interfaces
 
@@ -80,7 +80,7 @@ The platform is powered by smart contracts that implement:
 - Wagmi
 - Solidity Smart Contracts
 - Ethers.js
-- Rainbow-Kit Wallet Integration
+- WalletLink (`@stability-nexus/walletlink`) wallet integration
 
 ---
 

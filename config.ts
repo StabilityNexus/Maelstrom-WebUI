@@ -1,4 +1,4 @@
-import { getDefaultConfig } from '@rainbow-me/rainbowkit';
+import { createWalletLinkConfig } from '@stability-nexus/walletlink';
 import {
   mainnet,
   polygon,
@@ -30,8 +30,6 @@ const citrea_testnet = {
   }
 } as const satisfies Chain;
 
-export const wagmi_config = getDefaultConfig({
-  appName: 'Maelstrom',
-  projectId: '00aea9e5bb1721b907ad8ea20f354c6a',
+export const wagmi_config = createWalletLinkConfig({
   chains: [mordor, citrea_testnet, mainnet, polygon, base],
 });
