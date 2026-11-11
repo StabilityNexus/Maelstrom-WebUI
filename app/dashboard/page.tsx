@@ -11,9 +11,11 @@ import { RowPool } from "@/types/pool";
 import { toast } from "sonner";
 import { formatEther } from "viem";
 import { Deposit, Withdraw } from "@/types/trades";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { WalletCards } from "lucide-react";
 
 export default function DashboardPage() {
-  const { chainId } = useAccount();
+  const { address, chainId } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
   const contractClient = useMemo(
@@ -24,7 +26,6 @@ export default function DashboardPage() {
       ),
       [chainId]
     );
-  const { address } = useAccount();
   const [totalPools, setTotalPools] = useState<number>(0);
   const [portfolioValue, setPortfolioValue] = useState<string>("0");
   const [events, setEvents] = useState<(Deposit | Withdraw)[]>([]);
@@ -35,9 +36,7 @@ export default function DashboardPage() {
   const fetchPoolCount = async () => {
     if (!address) return;
     try {
-      const count = await contractClient.getUserPoolCount(address!);
-      setTotalPools(count);
-      return count;
+      return await contractClient.getUserPoolCount(address);
     } catch (error) {
       console.error("Error fetching pool count:", error);
       toast.error("Failed to fetch pool count.");
@@ -45,8 +44,7 @@ export default function DashboardPage() {
   };
 
   const fetchUserPools = async (poolCount: number) => {
-    if (!address) return;
-    if (poolCount === 0) return;
+    if (!address || poolCount === 0) return [];
     try {
       const allPools: RowPool[] = [];
       for (let i = 0; i < Math.ceil(poolCount / POOL_FETCH_LIMIT); i++) {
@@ -57,10 +55,11 @@ export default function DashboardPage() {
         );
         allPools.push(...userPools);
       }
-      setPools(allPools);
+      return allPools;
     } catch (error) {
       console.error("Error fetching user pools:", error);
       toast.error("Failed to fetch user pools.");
+      return [];
     }
   };
 
@@ -115,16 +114,24 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+
+    setTotalPools(0);
+    setPortfolioValue("0");
+    setEvents([]);
+    setPools([]);
+    setIsLoading(true);
+
     if (!address) return;
 
     const fetchData = async () => {
       try {
-        setIsLoading(true);
-        
         const count = await fetchPoolCount();
         if (count === undefined) throw new Error("Pool count is undefined");
+        if (cancelled) return;
         
-        await fetchUserPools(count);
+        const userPools = await fetchUserPools(count);
+        if (cancelled) return;
         
         // Fetch deposits and withdrawals in parallel and combine them
         const [deposits, withdrawals] = await Promise.all([
@@ -133,17 +140,29 @@ export default function DashboardPage() {
         ]);
         
         // Combine and set all events at once to avoid duplicates
-        setEvents([...deposits, ...withdrawals]);
+        if (!cancelled) {
+          setTotalPools(count);
+          setPools(userPools);
+          setEvents([...deposits, ...withdrawals]);
+        }
         
       } catch (error) {
-        console.error("Error fetching dashboard data:", error);
-        toast.error("Failed to fetch dashboard data.");
+        if (!cancelled) {
+          console.error("Error fetching dashboard data:", error);
+          toast.error("Failed to fetch dashboard data.");
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
 
     fetchData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [address]);
 
   useEffect(() => {
@@ -152,6 +171,42 @@ export default function DashboardPage() {
       setPortfolioValue(portfolio);
     }
   }, [pools]);
+
+  if (!address) {
+    return (
+      <div className="min-h-screen relative bg-gradient-pattern overflow-hidden">
+        <main className="container relative mx-auto flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-8">
+          <section
+            aria-labelledby="connect-wallet-heading"
+            className="relative w-full max-w-xl overflow-hidden rounded-xl border border-white/[0.05] p-8 text-center backdrop-blur-xl"
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-accent/[0.08] to-primary-500/[0.05]" />
+            <div className="relative flex flex-col items-center">
+              <div className="mb-6 rounded-full border border-accent/20 bg-accent/10 p-4 text-accent">
+                <WalletCards aria-hidden="true" className="h-8 w-8" />
+              </div>
+              <h1
+                id="connect-wallet-heading"
+                className="font-clash-display text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-white to-white/70"
+              >
+                Connect your wallet
+              </h1>
+              <p className="mt-3 mb-6 max-w-md font-plus-jakarta text-muted-foreground/70">
+                Connect a wallet to view your liquidity positions, portfolio
+                value, and recent activity.
+              </p>
+              <ConnectButton accountStatus="address" showBalance={false} />
+            </div>
+          </section>
+        </main>
+
+        <div className="fixed inset-0 pointer-events-none">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,var(--accent-cyan)/10%,transparent_50%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom,var(--primary-500)/5%,transparent_50%)]" />
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return <DashboardSkeleton />;
