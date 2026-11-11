@@ -36,9 +36,7 @@ export default function DashboardPage() {
   const fetchPoolCount = async () => {
     if (!address) return;
     try {
-      const count = await contractClient.getUserPoolCount(address!);
-      setTotalPools(count);
-      return count;
+      return await contractClient.getUserPoolCount(address);
     } catch (error) {
       console.error("Error fetching pool count:", error);
       toast.error("Failed to fetch pool count.");
@@ -46,8 +44,7 @@ export default function DashboardPage() {
   };
 
   const fetchUserPools = async (poolCount: number) => {
-    if (!address) return;
-    if (poolCount === 0) return;
+    if (!address || poolCount === 0) return [];
     try {
       const allPools: RowPool[] = [];
       for (let i = 0; i < Math.ceil(poolCount / POOL_FETCH_LIMIT); i++) {
@@ -58,10 +55,11 @@ export default function DashboardPage() {
         );
         allPools.push(...userPools);
       }
-      setPools(allPools);
+      return allPools;
     } catch (error) {
       console.error("Error fetching user pools:", error);
       toast.error("Failed to fetch user pools.");
+      return [];
     }
   };
 
@@ -118,23 +116,22 @@ export default function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!address) {
-      setTotalPools(0);
-      setPortfolioValue("0");
-      setEvents([]);
-      setPools([]);
-      setIsLoading(true);
-      return;
-    }
+    setTotalPools(0);
+    setPortfolioValue("0");
+    setEvents([]);
+    setPools([]);
+    setIsLoading(true);
+
+    if (!address) return;
 
     const fetchData = async () => {
       try {
-        setIsLoading(true);
-        
         const count = await fetchPoolCount();
         if (count === undefined) throw new Error("Pool count is undefined");
+        if (cancelled) return;
         
-        await fetchUserPools(count);
+        const userPools = await fetchUserPools(count);
+        if (cancelled) return;
         
         // Fetch deposits and withdrawals in parallel and combine them
         const [deposits, withdrawals] = await Promise.all([
@@ -144,6 +141,8 @@ export default function DashboardPage() {
         
         // Combine and set all events at once to avoid duplicates
         if (!cancelled) {
+          setTotalPools(count);
+          setPools(userPools);
           setEvents([...deposits, ...withdrawals]);
         }
         
